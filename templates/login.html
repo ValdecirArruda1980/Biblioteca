@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Biblioteca ETEC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 w-full max-w-md space-y-6">
+        
+        <div class="text-center space-y-2">
+            <div class="inline-flex p-3 bg-indigo-600/20 text-indigo-400 rounded-xl mb-2">
+                <i data-lucide="book-open" class="w-10 h-10 text-amber-400"></i>
+            </div>
+            <h1 class="text-2xl font-bold tracking-wide text-white">Biblioteca ETEC</h1>
+            <p class="text-xs text-slate-400">Painel Operacional & Analytics TCC</p>
+        </div>
+
+        {% if erro %}
+        <div class="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-xs font-semibold text-center">
+            {{ erro }}
+        </div>
+        {% endif %}
+
+        <form action="/login" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">E-mail do Administrador</label>
+                <input type="email" name="email" required placeholder="admin@etec.sp.gov.br" value="admin@etec.sp.gov.br"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg py-2.5 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Senha</label>
+                <input type="password" name="senha" required placeholder="••••••••" value="admin123"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg py-2.5 px-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+
+            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition text-sm shadow-lg shadow-indigo-600/30">
+                Acessar Painel
+            </button>
+        </form>
+
+        <div class="border-t border-slate-700/60 pt-4 text-center">
+            <p class="text-xs text-slate-500">Credenciais padrão pré-preenchidas para teste:</p>
+            <p class="text-xs text-indigo-400 font-mono mt-1">E-mail: admin@etec.sp.gov.br | Senha: admin123</p>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

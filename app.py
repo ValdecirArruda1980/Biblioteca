@@ -3,11 +3,13 @@ import os
 import sqlite3
 from datetime import datetime
 from docx import Document
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 import pandas as pd
 from pypdf import PdfReader
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
+app.secret_key = 'chave_secreta_biblioteca_etec_tcc'
 DB_NAME = 'database.db'
 
 
@@ -20,6 +22,29 @@ def get_db_connection():
 def init_db():
   conn = get_db_connection()
   cursor = conn.cursor()
+
+  # Tabela de Administradores
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            senha_hash TEXT NOT NULL
+        );
+    """)
+
+  # Criar administrador padrão se não existir
+  cursor.execute(
+      'SELECT id FROM usuarios WHERE email = ?', ('admin@etec.sp.gov.br',)
+  )
+  if not cursor.fetchone():
+    senha_padrao = generate_password_hash('admin123')
+    cursor.execute(
+        'INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)',
+        ('Administrador ETEC', 'admin@etec.sp.gov.br', senha_padrao),
+    )
+
+  # Tabela Leitores
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS leitores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,6 +55,7 @@ def init_db():
         );
     """)
 
+  # Tabela Livros
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS livros (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +70,7 @@ def init_db():
         );
     """)
 
+  # Migrações seguras de colunas
   cursor.execute('PRAGMA table_info(livros)')
   columns = [col['name'] for col in cursor.fetchall()]
   if 'editora' not in columns:
@@ -53,6 +80,7 @@ def init_db():
   if 'data_cadastro' not in columns:
     cursor.execute('ALTER TABLE livros ADD COLUMN data_cadastro TEXT')
 
+  # Tabela Empréstimos
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS emprestimos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,11 +94,15 @@ def init_db():
             FOREIGN KEY (livro_id) REFERENCES livros (id)
         );
     """)
+
   conn.commit()
   conn.close()
 
 
-# --- EXTRAÇÃO DE LIVROS DE ARQUIVO ---
+init_db()
+
+
+# --- FUNÇÕES DE EXTRAÇÃO DE ARQUIVOS ---
 def extrair_livros_de_arquivo(file, filename):
   livros_extraidos = []
   ext = filename.split('.')[-1].lower()
@@ -95,7 +127,6 @@ def extrair_livros_de_arquivo(file, filename):
           if pd.notna(row.get('ano', row.get('ano_publicacao')))
           else ''
       )
-
       try:
         qtd = int(row.get('quantidade', 1))
       except:
@@ -180,7 +211,6 @@ def extrair_livros_de_arquivo(file, filename):
   return livros_extraidos
 
 
-# --- EXTRAÇÃO DE ALUNOS/LEITORES DE ARQUIVO ---
 def extrair_alunos_de_arquivo(file, filename):
   alunos_extraidos = []
   ext = filename.split('.')[-1].lower()
@@ -266,16 +296,51 @@ def extrair_alunos_de_arquivo(file, filename):
   return alunos_extraidos
 
 
-# --- ROTAS DA APLICAÇÃO ---
+# --- ROTAS DE AUTENTICAÇÃO E TELA ---
 
 
 @app.route('/')
 def index():
-  return render_template('index.html')
+  if 'user_id' not in session:
+    return render_template('login.html')
+  return render_template('index.html', usuario_nome=session.get('user_nome'))
+
+
+@app.route('/login', methods=['POST'])
+def login():
+  email = request.form.get('email', '').strip()
+  senha = request.form.get('senha', '').strip()
+
+  conn = get_db_connection()
+  usuario = conn.execute(
+      'SELECT * FROM usuarios WHERE email = ?', (email,)
+  ).fetchone()
+  conn.close()
+
+  if usuario and check_password_hash(usuario['senha_hash'], senha):
+    session['user_id'] = usuario['id']
+    session['user_nome'] = usuario['nome']
+    return redirect(url_for('index'))
+  else:
+    return render_template(
+        'login.html', erro='E-mail ou senha incorretos. Tente novamente.'
+    )
+
+
+@app.route('/logout')
+def logout():
+  session.clear()
+  return redirect(url_for('index'))
+
+
+# --- ROTAS DA API DE DADOS ---
 
 
 @app.route('/api/leitores', methods=['GET', 'POST'])
 def api_leitores():
+  if 'user_id' not in session:
+    return jsonify({'error': 'Não autorizado'}), 401
+
   conn = get_db_connection()
   if request.method == 'POST':
     data = request.json
@@ -304,6 +369,8 @@ def api_leitores():
 
 @app.route('/api/leitores/importar', methods=['POST'])
 def api_importar_leitores():
+  if 'user_id' not in session:
+    return jsonify({'error': 'Não autorizado'}), 401
   if 'file' not in request.files:
     return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
 
@@ -313,21 +380,11 @@ def api_importar_leitores():
 
   try:
     alunos = extrair_alunos_de_arquivo(file, file.filename)
-
     if not alunos:
-      return (
-          jsonify({
-              'error': (
-                  'Não foi possível extrair alunos do arquivo. Verifique se o'
-                  ' formato tem as colunas Nome, RA e Curso.'
-              )
-          }),
-          400,
-      )
+      return jsonify({'error': 'Não foi possível extrair alunos.'}), 400
 
     conn = get_db_connection()
-    inseridos = 0
-    duplicados = 0
+    inseridos, duplicados = 0, 0
 
     for a in alunos:
       try:
@@ -343,9 +400,9 @@ def api_importar_leitores():
     conn.commit()
     conn.close()
 
-    msg = f'Sucesso! {inseridos} aluno(s) cadastrado(s) com sucesso.'
+    msg = f'Sucesso! {inseridos} aluno(s) cadastrado(s).'
     if duplicados > 0:
-      msg += f' ({duplicados} RA(s) ignorado(s) por já existirem no banco).'
+      msg += f' ({duplicados} RA(s) já existiam).'
 
     return jsonify({'message': msg}), 201
 
@@ -355,6 +412,9 @@ def api_importar_leitores():
 
 @app.route('/api/livros', methods=['GET', 'POST'])
 def api_livros():
+  if 'user_id' not in session:
+    return jsonify({'error': 'Não autorizado'}), 401
+
   conn = get_db_connection()
   if request.method == 'POST':
     data = request.json
@@ -388,6 +448,8 @@ def api_livros():
 
 @app.route('/api/livros/importar', methods=['POST'])
 def api_importar_livros():
+  if 'user_id' not in session:
+    return jsonify({'error': 'Não autorizado'}), 401
   if 'file' not in request.files:
     return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
 
@@ -397,17 +459,8 @@ def api_importar_livros():
 
   try:
     livros = extrair_livros_de_arquivo(file, file.filename)
-
     if not livros:
-      return (
-          jsonify({
-              'error': (
-                  'Não foi possível extrair livros do arquivo. Verifique se o'
-                  ' formato está correto.'
-              )
-          }),
-          400,
-      )
+      return jsonify({'error': 'Não foi possível extrair livros.'}), 400
 
     conn = get_db_connection()
     hoje = datetime.now().strftime('%d/%m/%Y')
@@ -436,12 +489,10 @@ def api_importar_livros():
     conn.close()
 
     return (
-        jsonify({
-            'message': (
-                f'Sucesso! {inseridos} livro(s) importado(s) com sucesso a'
-                ' partir do arquivo.'
-            )
-        }),
+        jsonify(
+            {'message': f'Sucesso! {inseridos} livro(s) importado(s) com'
+             ' sucesso.'}
+        ),
         201,
     )
 
@@ -451,6 +502,9 @@ def api_importar_livros():
 
 @app.route('/api/emprestimos', methods=['GET', 'POST'])
 def api_emprestimos():
+  if 'user_id' not in session:
+    return jsonify({'error': 'Não autorizado'}), 401
+
   conn = get_db_connection()
   if request.method == 'POST':
     data = request.json
@@ -493,6 +547,9 @@ def api_emprestimos():
 
 @app.route('/api/emprestimos/baixa/<int:emprestimo_id>', methods=['POST'])
 def api_baixa_emprestimo(emprestimo_id):
+  if 'user_id' not in session:
+    return jsonify({'error': 'Não autorizado'}), 401
+
   conn = get_db_connection()
   emprestimo = conn.execute(
       'SELECT livro_id, status FROM emprestimos WHERE id = ?', (emprestimo_id,)
@@ -523,5 +580,5 @@ def api_baixa_emprestimo(emprestimo_id):
 
 
 if __name__ == '__main__':
-  init_db()
-  app.run(debug=True, host='0.0.0.0', port=5000)
+  port = int(os.environ.get('PORT', 5000))
+  app.run(debug=True, host='0.0.0.0', port=port)
